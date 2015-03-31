@@ -82,6 +82,7 @@ Pib::Pib(Face& face,
   , m_certPublisher(m_face, m_db)
   , m_getProcessor(m_db)
   , m_defaultProcessor(m_db)
+  , m_listProcessor(m_db)
 {
   if (!m_db.getOwnerName().empty() && m_db.getOwnerName() != owner)
     throw Error("owner argument differs from OwnerName in database");
@@ -101,6 +102,7 @@ Pib::~Pib()
   m_face.unsetInterestFilter(m_pibMgmtFilterId);
   m_face.unsetInterestFilter(m_pibGetFilterId);
   m_face.unsetInterestFilter(m_pibDefaultFilterId);
+  m_face.unsetInterestFilter(m_pibListFilterId);
 
   m_face.unsetInterestFilter(m_pibPrefixId);
 }
@@ -226,6 +228,10 @@ Pib::registerPrefix()
   // set interest filter for default command
   m_pibDefaultFilterId = registerProcessor(Name(pibPrefix).append(DefaultParam::VERB),
                                            m_defaultProcessor);
+
+  // set interest filter for list command
+  m_pibListFilterId = registerProcessor(Name(pibPrefix).append(ListParam::VERB),
+                                        m_listProcessor);
 }
 
 void

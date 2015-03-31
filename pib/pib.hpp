@@ -31,6 +31,7 @@
 
 #include "get-query-processor.hpp"
 #include "default-query-processor.hpp"
+#include "list-query-processor.hpp"
 
 #include "security/sec-tpm.hpp"
 
@@ -143,11 +144,13 @@ private:
 
   GetQueryProcessor m_getProcessor;
   DefaultQueryProcessor m_defaultProcessor;
+  ListQueryProcessor m_listProcessor;
 
   const RegisteredPrefixId* m_pibPrefixId;
   const InterestFilterId* m_pibMgmtFilterId;
   const InterestFilterId* m_pibGetFilterId;
   const InterestFilterId* m_pibDefaultFilterId;
+  const InterestFilterId* m_pibListFilterId;
 };
 
 } // namespace pib
