@@ -30,6 +30,7 @@
 #include "util/in-memory-storage-persistent.hpp"
 
 #include "get-query-processor.hpp"
+#include "default-query-processor.hpp"
 
 #include "security/sec-tpm.hpp"
 
@@ -119,6 +120,10 @@ private: // initialization
   void
   returnResult(const Name& dataName, const Block& content);
 
+  template<class Processor>
+  const InterestFilterId*
+  registerProcessor(const Name& prefix, Processor& process);
+
 private:
 
   static const Name EMPTY_SIGNER_NAME;
@@ -137,10 +142,12 @@ private:
   util::InMemoryStoragePersistent m_responseCache;
 
   GetQueryProcessor m_getProcessor;
+  DefaultQueryProcessor m_defaultProcessor;
 
   const RegisteredPrefixId* m_pibPrefixId;
   const InterestFilterId* m_pibMgmtFilterId;
   const InterestFilterId* m_pibGetFilterId;
+  const InterestFilterId* m_pibDefaultFilterId;
 };
 
 } // namespace pib

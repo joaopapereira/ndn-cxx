@@ -81,6 +81,7 @@ Pib::Pib(Face& face,
   , m_face(face)
   , m_certPublisher(m_face, m_db)
   , m_getProcessor(m_db)
+  , m_defaultProcessor(m_db)
 {
   if (!m_db.getOwnerName().empty() && m_db.getOwnerName() != owner)
     throw Error("owner argument differs from OwnerName in database");
@@ -98,8 +99,10 @@ Pib::Pib(Face& face,
 Pib::~Pib()
 {
   m_face.unsetInterestFilter(m_pibMgmtFilterId);
-  m_face.unsetInterestFilter(m_pibPrefixId);
   m_face.unsetInterestFilter(m_pibGetFilterId);
+  m_face.unsetInterestFilter(m_pibDefaultFilterId);
+
+  m_face.unsetInterestFilter(m_pibPrefixId);
 }
 
 void
@@ -201,11 +204,12 @@ Pib::registerPrefix()
   // register pib prefix
   Name pibPrefix = PIB_PREFIX;
   pibPrefix.append(m_owner);
-  m_face.registerPrefix(pibPrefix,
-                        [] (const Name& name) {},
-                        [] (const Name& name, const string& msg) {
-                          throw Error("cannot register pib prefix");
-                        });
+  m_pibPrefixId =
+    m_face.registerPrefix(pibPrefix,
+                          [] (const Name& name) {},
+                          [] (const Name& name, const string& msg) {
+                            throw Error("cannot register pib prefix");
+                          });
 
   // set interest filter for management certificate
   m_pibMgmtFilterId =
@@ -217,14 +221,11 @@ Pib::registerPrefix()
                              });
 
   // set interest filter for get command
-  m_pibGetFilterId =
-    m_face.setInterestFilter(Name(pibPrefix).append(GetParam::VERB),
-                             [this] (const InterestFilter&, const Interest& interest) {
-                               std::pair<bool, Block> result = m_getProcessor(interest);
-                               if (result.first)
-                                 returnResult(Name(interest.getName()).appendVersion(),
-                                              result.second);
-                             });
+  m_pibGetFilterId = registerProcessor(Name(pibPrefix).append(GetParam::VERB), m_getProcessor);
+
+  // set interest filter for default command
+  m_pibDefaultFilterId = registerProcessor(Name(pibPrefix).append(DefaultParam::VERB),
+                                           m_defaultProcessor);
 }
 
 void
@@ -241,6 +242,19 @@ Pib::returnResult(const Name& dataName, const Block& content)
 
   // Put data to face.
   m_face.put(*data);
+}
+
+template<class Processor>
+const InterestFilterId*
+Pib::registerProcessor(const Name& prefix, Processor& process)
+{
+  return m_face.setInterestFilter(prefix,
+                                  [&] (const InterestFilter&, const Interest& interest) {
+                                    std::pair<bool, Block> result = process(interest);
+                                    if (result.first)
+                                      returnResult(Name(interest.getName()).appendVersion(),
+                                                   result.second);
+                                  });
 }
 
 } // namespace pib

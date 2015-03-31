@@ -19,19 +19,18 @@
  * See AUTHORS.md for complete list of ndn-cxx authors and contributors.
  */
 
-#ifndef NDN_PIB_GET_QUERY_PROCESSOR_HPP
-#define NDN_PIB_GET_QUERY_PROCESSOR_HPP
+#ifndef NDN_PIB_DEFAULT_QUERY_PROCESSOR_HPP
+#define NDN_PIB_DEFAULT_QUERY_PROCESSOR_HPP
 
 #include "pib-db.hpp"
 #include "interest.hpp"
-#include "security/pib/get-param.hpp"
+#include "security/pib/default-param.hpp"
 #include <utility>
 
 namespace ndn {
 namespace pib {
 
-/// @brief implements the PIB service
-class GetQueryProcessor : noncopyable
+class DefaultQueryProcessor : noncopyable
 {
 public:
   class Error : public std::runtime_error
@@ -48,30 +47,25 @@ public:
    * @brief Constructor
    *
    * @param db The pib database.
-   * @param owner Owner of the pib database.
    */
   explicit
-  GetQueryProcessor(PibDb& db);
+  DefaultQueryProcessor(PibDb& db);
 
   std::pair<bool, Block>
   operator()(const Interest& interest);
 
 private:
   std::pair<bool, Block>
-  processGetUserQuery(const GetParam& param);
+  processDefaultIdQuery(const DefaultParam& param);
 
   std::pair<bool, Block>
-  processGetIdQuery(const GetParam& param);
+  processDefaultKeyQuery(const DefaultParam& param);
 
   std::pair<bool, Block>
-  processGetKeyQuery(const GetParam& param);
-
-  std::pair<bool, Block>
-  processGetCertQuery(const GetParam& param);
+  processDefaultCertQuery(const DefaultParam& param);
 
 private:
-  static const Name PIB_PREFIX;
-  static const size_t GET_QUERY_LENGTH;
+  static const size_t DEFAULT_QUERY_LENGTH;
 
   const PibDb&  m_db;
 };
@@ -79,4 +73,4 @@ private:
 } // namespace pib
 } // namespace ndn
 
-#endif // NDN_PIB_GET_QUERY_PROCESSOR_HPP
+#endif // NDN_PIB_DEFAULT_QUERY_PROCESSOR_HPP

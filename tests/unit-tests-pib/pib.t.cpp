@@ -170,7 +170,7 @@ BOOST_AUTO_TEST_CASE(InitCertTest3)
                     Name("/localhost/pib/testUser/mgmt/KEY"));
 }
 
-BOOST_AUTO_TEST_CASE(ReadCommandTest)
+BOOST_AUTO_TEST_CASE(GetCommandTest)
 {
   owner = "alice";
 
@@ -351,6 +351,146 @@ BOOST_AUTO_TEST_CASE(ReadCommandTest)
   PibError result09;
   BOOST_REQUIRE_NO_THROW(result09.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
   BOOST_CHECK_EQUAL(result09.getErrorCode(), ERR_WRONG_PARAM);
+}
+
+BOOST_AUTO_TEST_CASE(DefaultCommandTest)
+{
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+  advanceClocks(time::milliseconds(10), 10);
+  util::InMemoryStoragePersistent& cache = pib.getResponseCache();
+  auto ownerMgmtCert = pib.getMgmtCert();
+  m_keyChain.addCertificate(ownerMgmtCert);
+
+  PibDb db(tmpPath.string());
+
+  Name testId("/test/identity");
+  Name testIdCertName00 = m_keyChain.createIdentity(testId);
+  shared_ptr<IdentityCertificate> cert00 = m_keyChain.getCertificate(testIdCertName00);
+  Name testIdKeyName0 = cert00->getPublicKeyName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert01 = m_keyChain.selfSign(testIdKeyName0);
+  Name testIdCertName01 = cert01->getName();
+
+  advanceClocks(time::milliseconds(100));
+  Name testIdKeyName1 = m_keyChain.generateRsaKeyPair(testId);
+  shared_ptr<IdentityCertificate> cert10 = m_keyChain.selfSign(testIdKeyName1);
+  Name testIdCertName10 = cert10->getName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert11 = m_keyChain.selfSign(testIdKeyName1);
+  Name testIdCertName11 = cert11->getName();
+
+  BOOST_CHECK_EQUAL(db.hasIdentity(testId), false);
+  BOOST_CHECK_EQUAL(db.hasKey(testIdKeyName0), false);
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName00), false);
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName01), false);
+  BOOST_CHECK_EQUAL(db.hasKey(testIdKeyName1), false);
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName10), false);
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName11), false);
+
+  db.addCertificate(*cert00);
+  db.addCertificate(*cert01);
+  db.addCertificate(*cert10);
+  db.addCertificate(*cert11);
+  db.setDefaultIdentity(testId);
+  db.setDefaultKeyNameOfIdentity(testIdKeyName0);
+  db.setDefaultCertNameOfKey(testIdCertName00);
+
+  BOOST_CHECK_EQUAL(db.hasIdentity(testId), true);
+  BOOST_CHECK_EQUAL(db.hasKey(testIdKeyName0), true);
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName00), true);
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName01), true);
+  BOOST_CHECK_EQUAL(db.hasKey(testIdKeyName1), true);
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName10), true);
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName11), true);
+
+  // Default Param
+  DefaultParam param11(TYPE_ID, TYPE_USER);
+  shared_ptr<Interest> interest11 = generateUnsignedInterest(param11, owner);
+
+  face->sentDatas.clear();
+  face->receive(*interest11);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_REQUIRE(cache.find(interest11->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibIdentity result11;
+  BOOST_REQUIRE_NO_THROW(result11.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result11.getIdentity(), testId);
+
+
+  DefaultParam param13(TYPE_ID, TYPE_ID);
+  shared_ptr<Interest> interest13 = generateUnsignedInterest(param13, owner);
+
+  face->sentDatas.clear();
+  face->receive(*interest13);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_REQUIRE(cache.find(interest13->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result13;
+  BOOST_REQUIRE_NO_THROW(result13.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result13.getErrorCode(), ERR_WRONG_PARAM);
+
+
+  DefaultParam param14(TYPE_KEY, TYPE_ID, testId);
+  shared_ptr<Interest> interest14 = generateUnsignedInterest(param14, owner);
+
+  face->sentDatas.clear();
+  face->receive(*interest14);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_REQUIRE(cache.find(interest14->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibPublicKey result14;
+  BOOST_REQUIRE_NO_THROW(result14.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result14.getKeyName(), testIdKeyName0);
+
+
+  DefaultParam param15(TYPE_CERT, TYPE_ID, testId);
+  shared_ptr<Interest> interest15 = generateUnsignedInterest(param15, owner);
+
+  face->sentDatas.clear();
+  face->receive(*interest15);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_REQUIRE(cache.find(interest15->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibCertificate result15;
+  BOOST_REQUIRE_NO_THROW(result15.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result15.getCertificate().getName(), testIdCertName00);
+
+
+  DefaultParam param16(TYPE_CERT, TYPE_USER);
+  shared_ptr<Interest> interest16 = generateUnsignedInterest(param16, owner);
+
+  face->sentDatas.clear();
+  face->receive(*interest16);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_REQUIRE(cache.find(interest16->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibCertificate result16;
+  BOOST_REQUIRE_NO_THROW(result16.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result16.getCertificate().getName(), testIdCertName00);
+
+
+  DefaultParam param17(TYPE_CERT, TYPE_KEY, testIdKeyName1);
+  shared_ptr<Interest> interest17 = generateUnsignedInterest(param17, owner);
+
+  face->sentDatas.clear();
+  face->receive(*interest17);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_REQUIRE(cache.find(interest17->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibCertificate result17;
+  BOOST_REQUIRE_NO_THROW(result17.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result17.getCertificate().getName(), testIdCertName10);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
