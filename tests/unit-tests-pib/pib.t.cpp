@@ -1301,6 +1301,86 @@ BOOST_AUTO_TEST_CASE(DeleteRegularKeyTest)
   BOOST_CHECK_EQUAL(db.hasIdentity(testId), false);
 }
 
+BOOST_AUTO_TEST_CASE(ReadCommandTest2)
+{
+  // Read Certificates;
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+
+  advanceClocks(time::milliseconds(10), 100);
+  auto ownerMgmtCert = pib.getMgmtCert();
+  m_keyChain.addCertificate(ownerMgmtCert);
+
+  Name testId("/test/identity");
+  Name testIdCertName00 = m_keyChain.createIdentity(testId);
+  shared_ptr<IdentityCertificate> cert00 = m_keyChain.getCertificate(testIdCertName00);
+  Name testIdKeyName0 = cert00->getPublicKeyName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert01 = m_keyChain.selfSign(testIdKeyName0);
+  Name testIdCertName01 = cert01->getName();
+
+  advanceClocks(time::milliseconds(100));
+  Name testIdKeyName1 = m_keyChain.generateRsaKeyPair(testId);
+  shared_ptr<IdentityCertificate> cert10 = m_keyChain.selfSign(testIdKeyName1);
+  Name testIdCertName10 = cert10->getName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert11 = m_keyChain.selfSign(testIdKeyName1);
+  Name testIdCertName11 = cert11->getName();
+
+
+  UpdateParam param00(*cert00);
+  UpdateParam param01(*cert01);
+  UpdateParam param10(*cert10);
+  UpdateParam param11(*cert11);
+  auto interest00 = generateSignedInterest(param00, owner, ownerMgmtCert.getName());
+  auto interest01 = generateSignedInterest(param01, owner, ownerMgmtCert.getName());
+  auto interest10 = generateSignedInterest(param10, owner, ownerMgmtCert.getName());
+  auto interest11 = generateSignedInterest(param11, owner, ownerMgmtCert.getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest00);
+  advanceClocks(time::milliseconds(10), 10);
+  face->receive(*interest01);
+  advanceClocks(time::milliseconds(10), 10);
+  face->receive(*interest10);
+  advanceClocks(time::milliseconds(10), 10);
+  face->receive(*interest11);
+  advanceClocks(time::milliseconds(10), 10);
+
+  auto interest1 = make_shared<Interest>(testIdCertName11);
+  face->sentDatas.clear();
+  face->receive(*interest1);
+  advanceClocks(time::milliseconds(10), 10);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  BOOST_CHECK(face->sentDatas[0].wireEncode() == cert11->wireEncode());
+
+  auto interest2 = make_shared<Interest>(testIdCertName11.getPrefix(-1));
+  face->sentDatas.clear();
+  face->receive(*interest2);
+  advanceClocks(time::milliseconds(10), 10);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  BOOST_CHECK_EQUAL(face->sentDatas[0].getName().getPrefix(-1),
+                    cert11->getName().getPrefix(-1));
+
+  auto interest3 = make_shared<Interest>(testIdCertName11.getPrefix(-1));
+  pib.getDb().deleteCertificate(testIdCertName11);
+  face->sentDatas.clear();
+  face->receive(*interest3);
+  advanceClocks(time::milliseconds(10), 10);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  BOOST_CHECK(face->sentDatas[0].wireEncode() == cert10->wireEncode());
+
+  auto interest4 = make_shared<Interest>(testIdCertName11);
+  face->sentDatas.clear();
+  face->receive(*interest4);
+  advanceClocks(time::milliseconds(10), 10);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 0);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 } // namespace tests
