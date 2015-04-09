@@ -32,6 +32,7 @@
 #include "get-query-processor.hpp"
 #include "default-query-processor.hpp"
 #include "list-query-processor.hpp"
+#include "update-query-processor.hpp"
 
 #include "security/sec-tpm.hpp"
 
@@ -66,6 +67,9 @@ public:
       const std::string& owner);
 
   ~Pib();
+
+  void
+  setMgmtCert(std::shared_ptr<IdentityCertificate> mgmtCert);
 
 NDN_CXX_PUBLIC_WITH_TESTS_ELSE_PROTECTED:
   PibDb&
@@ -118,12 +122,20 @@ private: // initialization
   void
   registerPrefix();
 
-  void
-  returnResult(const Name& dataName, const Block& content);
-
   template<class Processor>
   const InterestFilterId*
   registerProcessor(const Name& prefix, Processor& process);
+
+  template<class Processor>
+  const InterestFilterId*
+  registerSignedCommandProcessor(const Name& prefix, Processor& process);
+
+  template<class Processor>
+  void
+  processCommand(Processor& process, const Interest& interest);
+
+  void
+  returnResult(const Name& dataName, const Block& content);
 
 private:
 
@@ -131,7 +143,7 @@ private:
   static const Name PIB_PREFIX;
   static const name::Component MGMT_LABEL;
 
-  PibDb  m_db;
+  PibDb m_db;
   std::unique_ptr<SecTpm> m_tpm;
   std::string m_owner;
   std::shared_ptr<IdentityCertificate> m_mgmtCert;
@@ -142,15 +154,19 @@ private:
   CertPublisher m_certPublisher;
   util::InMemoryStoragePersistent m_responseCache;
 
-  GetQueryProcessor m_getProcessor;
-  DefaultQueryProcessor m_defaultProcessor;
-  ListQueryProcessor m_listProcessor;
-
   const RegisteredPrefixId* m_pibPrefixId;
   const InterestFilterId* m_pibMgmtFilterId;
   const InterestFilterId* m_pibGetFilterId;
   const InterestFilterId* m_pibDefaultFilterId;
   const InterestFilterId* m_pibListFilterId;
+  const InterestFilterId* m_pibUpdateFilterId;
+
+NDN_CXX_PUBLIC_WITH_TESTS_ELSE_PRIVATE:
+
+  GetQueryProcessor m_getProcessor;
+  DefaultQueryProcessor m_defaultProcessor;
+  ListQueryProcessor m_listProcessor;
+  UpdateQueryProcessor m_updateProcessor;
 };
 
 } // namespace pib

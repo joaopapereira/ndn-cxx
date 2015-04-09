@@ -83,6 +83,7 @@ Pib::Pib(Face& face,
   , m_getProcessor(m_db)
   , m_defaultProcessor(m_db)
   , m_listProcessor(m_db)
+  , m_updateProcessor(m_db, *this)
 {
   if (!m_db.getOwnerName().empty() && m_db.getOwnerName() != owner)
     throw Error("owner argument differs from OwnerName in database");
@@ -103,8 +104,16 @@ Pib::~Pib()
   m_face.unsetInterestFilter(m_pibGetFilterId);
   m_face.unsetInterestFilter(m_pibDefaultFilterId);
   m_face.unsetInterestFilter(m_pibListFilterId);
+  m_face.unsetInterestFilter(m_pibUpdateFilterId);
 
   m_face.unsetInterestFilter(m_pibPrefixId);
+}
+
+void
+Pib::setMgmtCert(std::shared_ptr<IdentityCertificate> mgmtCert)
+{
+  if (mgmtCert != nullptr)
+    m_mgmtCert = mgmtCert;
 }
 
 void
@@ -232,6 +241,47 @@ Pib::registerPrefix()
   // set interest filter for list command
   m_pibListFilterId = registerProcessor(Name(pibPrefix).append(ListParam::VERB),
                                         m_listProcessor);
+
+  // set interest filter for update command
+  m_pibUpdateFilterId = registerSignedCommandProcessor(Name(pibPrefix).append(UpdateParam::VERB),
+                                                       m_updateProcessor);
+}
+
+template<class Processor>
+const InterestFilterId*
+Pib::registerProcessor(const Name& prefix, Processor& process)
+{
+  return m_face.setInterestFilter(prefix,
+                                  [&] (const InterestFilter&, const Interest& interest) {
+                                    processCommand(process, interest);
+                                  });
+}
+
+template<class Processor>
+const InterestFilterId*
+Pib::registerSignedCommandProcessor(const Name& prefix, Processor& process)
+{
+  const InterestFilterId* filterId =
+    m_face.setInterestFilter(prefix,
+      [&] (const InterestFilter&, const Interest& interest) {
+        m_validator.validate(interest,
+                             [&] (const shared_ptr<const Interest>& interest) {
+                               processCommand(process, *interest);
+                             },
+                             [] (const shared_ptr<const Interest>&, const string&) {});
+      });
+
+  return filterId;
+}
+
+template<class Processor>
+void
+Pib::processCommand(Processor& process, const Interest& interest)
+{
+  std::pair<bool, Block> result = process(interest);
+  if (result.first)
+    returnResult(Name(interest.getName()).appendVersion(),
+                 result.second);
 }
 
 void
@@ -248,19 +298,6 @@ Pib::returnResult(const Name& dataName, const Block& content)
 
   // Put data to face.
   m_face.put(*data);
-}
-
-template<class Processor>
-const InterestFilterId*
-Pib::registerProcessor(const Name& prefix, Processor& process)
-{
-  return m_face.setInterestFilter(prefix,
-                                  [&] (const InterestFilter&, const Interest& interest) {
-                                    std::pair<bool, Block> result = process(interest);
-                                    if (result.first)
-                                      returnResult(Name(interest.getName()).appendVersion(),
-                                                   result.second);
-                                  });
 }
 
 } // namespace pib

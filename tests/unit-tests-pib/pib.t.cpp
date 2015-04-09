@@ -122,6 +122,7 @@ BOOST_AUTO_TEST_CASE(InitCertTest2)
   owner = "testUser";
 
   Name testUser("/localhost/pib/testUser/mgmt");
+
   addIdentity(testUser);
   Name testUserCertName = m_keyChain.getDefaultCertificateNameForIdentity(testUser);
   shared_ptr<IdentityCertificate> testUserCert = m_keyChain.getCertificate(testUserCertName);
@@ -591,6 +592,442 @@ BOOST_AUTO_TEST_CASE(ListCommandTest)
   PibNameList result23;
   BOOST_REQUIRE_NO_THROW(result23.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
   BOOST_CHECK_EQUAL(result23.getNameList().size(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(IsUpdateAllowedTest1)
+{
+  // This test case is to check the access control of local management key
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+
+  UpdateQueryProcessor& pro = pib.m_updateProcessor;
+
+  Name target01("/localhost/pib");
+  Name target02("/localhost/pib/alice/mgmt");
+  Name target03("/localhost/pib/alice/mgmt/ok");
+  Name target04("/localhost/pib/alice");
+  Name target05("/test/id");
+  Name target06("/test/id/ksk-123");
+  Name target07("/test/id/KEY/ksk-123/ID-CERT/version");
+  Name signer01 = pib.getMgmtCert().getName().getPrefix(-1);
+  Name signer02("/localhost/pib/bob/mgmt/KEY/ksk-1234/ID-CERT");
+
+  // TYPE_USER is handled separately, isUpdatedAllowed simply returns false
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_USER, target02, signer01, DEFAULT_OPT_NO), false);
+
+  // Test access control of local management key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, target01, signer01, DEFAULT_OPT_NO), false);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, target02, signer01, DEFAULT_OPT_NO), false);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, target03, signer01, DEFAULT_OPT_NO), false);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, target04, signer01, DEFAULT_OPT_NO), false);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, target05, signer01, DEFAULT_OPT_NO), true);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, target05, signer02, DEFAULT_OPT_NO), false);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, target06, signer01, DEFAULT_OPT_NO), true);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, target06, signer02, DEFAULT_OPT_NO), false);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, target07, signer01, DEFAULT_OPT_NO), true);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, target07, signer02, DEFAULT_OPT_NO), false);
+}
+
+BOOST_AUTO_TEST_CASE(IsUpdateAllowedTest2)
+{
+  // This test case is to check the access control of regular key
+
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+  PibDb db(tmpPath.string());
+
+  UpdateQueryProcessor& pro = pib.m_updateProcessor;
+
+  Name parent("/test");
+  addIdentity(parent);
+  Name parentCertName = m_keyChain.getDefaultCertificateNameForIdentity(parent);
+  shared_ptr<IdentityCertificate> parentCert = m_keyChain.getCertificate(parentCertName);
+  Name parentSigner = parentCertName.getPrefix(-1);
+
+  advanceClocks(time::milliseconds(100));
+  Name parentKeyName2 = m_keyChain.generateRsaKeyPair(parent);
+  shared_ptr<IdentityCertificate> parentCert2 = m_keyChain.selfSign(parentKeyName2);
+  Name parentSigner2 = parentCert2->getName().getPrefix(-1);
+
+  db.addIdentity(parent);
+  db.addKey(parentCert->getPublicKeyName(), parentCert->getPublicKeyInfo());
+  db.addKey(parentCert2->getPublicKeyName(), parentCert2->getPublicKeyInfo());
+  db.setDefaultKeyNameOfIdentity(parentCert->getPublicKeyName());
+  db.addCertificate(*parentCert);
+  db.setDefaultCertNameOfKey(parentCert->getName());
+  db.addCertificate(*parentCert2);
+  db.setDefaultCertNameOfKey(parentCert2->getName());
+
+  Name testId("/test/id");
+  addIdentity(testId);
+  Name certName = m_keyChain.getDefaultCertificateNameForIdentity(testId);
+  shared_ptr<IdentityCertificate> testCert = m_keyChain.getCertificate(certName);
+  Name testKeyName = testCert->getPublicKeyName();
+  Name testSigner = certName.getPrefix(-1);
+
+  advanceClocks(time::milliseconds(100));
+  Name secondKeyName = m_keyChain.generateRsaKeyPair(testId);
+  shared_ptr<IdentityCertificate> secondCert = m_keyChain.selfSign(secondKeyName);
+  Name secondCertName = secondCert->getName();
+  Name secondSigner = secondCertName.getPrefix(-1);
+
+  db.addIdentity(testId);
+  db.addKey(testKeyName, testCert->getPublicKeyInfo());
+  db.addKey(secondKeyName, secondCert->getPublicKeyInfo());
+  db.setDefaultKeyNameOfIdentity(testKeyName);
+  db.addCertificate(*testCert);
+  db.setDefaultCertNameOfKey(testCert->getName());
+  db.addCertificate(*secondCert);
+  db.setDefaultCertNameOfKey(secondCert->getName());
+
+  Name nonSigner("/non-signer/KEY/ksk-123/ID-CERT");
+
+  // for target type = TYPE_ID
+  // one cannot add non-child
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, testId, nonSigner, DEFAULT_OPT_NO), false);
+  // parent can add child
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, testId, parentSigner, DEFAULT_OPT_NO), true);
+  // non-default parent key cannot add a child
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, testId, parentSigner2, DEFAULT_OPT_NO), false);
+  // only DEFAULT_OPT_NO is allowed if target type is TYPE_ID
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, testId, parentSigner, DEFAULT_OPT_ID), false);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, testId, parentSigner, DEFAULT_OPT_KEY), false);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_ID, testId, parentSigner, DEFAULT_OPT_USER), false);
+
+  // for target type = TYPE_KEY
+  // one can add its own key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, testKeyName, testSigner, DEFAULT_OPT_NO),
+                    true);
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, secondKeyName, testSigner, DEFAULT_OPT_NO),
+                    true);
+  // one can set its default key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, testKeyName, testSigner, DEFAULT_OPT_ID),
+                    true);
+  // non-default key cannot add its own key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, secondKeyName, secondSigner, DEFAULT_OPT_NO),
+                    false);
+  // non-default key cannot set its default key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, testKeyName, secondSigner, DEFAULT_OPT_ID),
+                    false);
+  // one can add its child's key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, secondKeyName, parentSigner, DEFAULT_OPT_NO),
+                    true);
+  // one can set its child's default key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, testKeyName, parentSigner, DEFAULT_OPT_ID),
+                    true);
+  // non-default key cannot add its child's key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, secondKeyName, parentSigner2, DEFAULT_OPT_NO),
+                    false);
+  // non-default parent key cannot set its child's default key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, testKeyName, parentSigner2, DEFAULT_OPT_ID),
+                    false);
+  // DEFAULT_OPT_KEY is not allowed if target type is TYPE_KEY
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, testKeyName, testSigner, DEFAULT_OPT_KEY),
+                    false);
+  // DEFAULT_OPT_USER is not allowed if signer is no local management key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_KEY, testKeyName, testSigner, DEFAULT_OPT_USER),
+                    false);
+
+  // for target type = TYPE_CERT
+  // one can add its own certificate
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, certName, testSigner, DEFAULT_OPT_NO),
+                    true);
+  // one can set its own default certificate
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, certName, testSigner, DEFAULT_OPT_ID),
+                    true);
+  // one can set its own key's default certificate
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, certName, testSigner, DEFAULT_OPT_KEY),
+                    true);
+  // DEFAULT_OPT_USER is not allowed if signer is no local management key
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, certName, testSigner, DEFAULT_OPT_USER),
+                    false);
+  // non-default key can add other key's certificate
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, certName, secondSigner, DEFAULT_OPT_NO),
+                    false);
+  // non-default key can add its own certificate
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, secondCertName, secondSigner, DEFAULT_OPT_NO),
+                    true);
+  // one can add its child's certificate
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, certName, parentSigner, DEFAULT_OPT_NO),
+                    true);
+  // non-default key cannot add its child's certificate
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, certName, parentSigner2, DEFAULT_OPT_NO),
+                    false);
+  // non-default key cannot set add its identity default certificate
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, secondCertName, secondSigner, DEFAULT_OPT_ID),
+                    false);
+  // non-default key can set add its own default certificate
+  BOOST_CHECK_EQUAL(pro.isUpdateAllowed(TYPE_CERT, secondCertName, secondSigner, DEFAULT_OPT_KEY),
+                    true);
+}
+
+BOOST_AUTO_TEST_CASE(UpdateUserTest)
+{
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+  advanceClocks(time::milliseconds(10), 10);
+  util::InMemoryStoragePersistent& cache = pib.getResponseCache();
+
+  m_keyChain.addCertificate(pib.getMgmtCert());
+
+  PibDb db(tmpPath.string());
+
+  Name bob("/localhost/pib/bob/mgmt");
+  addIdentity(bob);
+  Name bobCertName = m_keyChain.getDefaultCertificateNameForIdentity(bob);
+  shared_ptr<IdentityCertificate> bobCert = m_keyChain.getCertificate(bobCertName);
+
+  // signer is correct, but user name is wrong, should fall
+  PibUser pibUser1;
+  pibUser1.setMgmtCert(*bobCert);
+  UpdateParam param1(pibUser1);
+  auto interest1 = generateSignedInterest(param1, owner, db.getMgmtCertificate()->getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest1);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_REQUIRE(cache.find(interest1->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result;
+  BOOST_REQUIRE_NO_THROW(result.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result.getErrorCode(), ERR_WRONG_PARAM);
+
+  // user name is correct, but signer is wrong, should fail
+  PibUser pibUser2;
+  pibUser2.setMgmtCert(pib.getMgmtCert());
+  UpdateParam param2(pibUser2);
+  auto interest2 = generateSignedInterest(param2, owner, bobCertName);
+
+  face->sentDatas.clear();
+  face->receive(*interest2);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest2->getName()) == nullptr); // verification should fail, no response
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 0);
+
+  // update an existing user with a new mgmt key, signed by the old mgmt key.
+  advanceClocks(time::milliseconds(100));
+  Name ownerSecondKeyName =
+    m_keyChain.generateRsaKeyPair(Name("/localhost/pib/alice/mgmt"), false);
+  shared_ptr<IdentityCertificate> ownerSecondCert = m_keyChain.selfSign(ownerSecondKeyName);
+  m_keyChain.addCertificate(*ownerSecondCert);
+
+  PibUser pibUser3;
+  pibUser3.setMgmtCert(*ownerSecondCert);
+  UpdateParam param3(pibUser3);
+  auto interest3 = generateSignedInterest(param3, owner, db.getMgmtCertificate()->getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest3);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_REQUIRE(cache.find(interest3->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result3;
+  BOOST_REQUIRE_NO_THROW(result3.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result3.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK(db.getMgmtCertificate()->wireEncode() == ownerSecondCert->wireEncode());
+
+  // Add an cert and set it as user default cert.
+  Name testId("/test/id");
+  Name testIdCertName = m_keyChain.createIdentity(testId);
+  shared_ptr<IdentityCertificate> testIdCert = m_keyChain.getCertificate(testIdCertName);
+  Name testIdKeyName = testIdCert->getPublicKeyName();
+  UpdateParam updateParam(*testIdCert, DEFAULT_OPT_USER);
+  auto interest4 = generateSignedInterest(updateParam, owner, ownerSecondCert->getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest4);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_REQUIRE(cache.find(interest4->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result4;
+  BOOST_REQUIRE_NO_THROW(result4.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result4.getErrorCode(), ERR_SUCCESS);
+
+  BOOST_CHECK(pib.getDb().hasCertificate(testIdCertName));
+  BOOST_CHECK(pib.getDb().hasKey(testIdKeyName));
+  BOOST_CHECK(pib.getDb().hasIdentity(testId));
+
+  BOOST_REQUIRE_NO_THROW(pib.getDb().getDefaultCertNameOfKey(testIdKeyName));
+  BOOST_REQUIRE_NO_THROW(pib.getDb().getDefaultKeyNameOfIdentity(testId));
+  BOOST_REQUIRE_NO_THROW(pib.getDb().getDefaultIdentity());
+
+  BOOST_CHECK_EQUAL(pib.getDb().getDefaultCertNameOfKey(testIdKeyName), testIdCertName);
+  BOOST_CHECK_EQUAL(pib.getDb().getDefaultKeyNameOfIdentity(testId), testIdKeyName);
+  BOOST_CHECK_EQUAL(pib.getDb().getDefaultIdentity(), testId);
+}
+
+BOOST_AUTO_TEST_CASE(UpdateRegularKeyTest)
+{
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+  advanceClocks(time::milliseconds(10), 10);
+  util::InMemoryStoragePersistent& cache = pib.getResponseCache();
+  auto ownerMgmtCert = pib.getMgmtCert();
+  m_keyChain.addCertificate(ownerMgmtCert);
+
+  PibDb db(tmpPath.string());
+
+  Name id0("/test/identity0");
+  Name certName000 = m_keyChain.createIdentity(id0);
+  shared_ptr<IdentityCertificate> cert000 = m_keyChain.getCertificate(certName000);
+  Name keyName00 = cert000->getPublicKeyName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert001 = m_keyChain.selfSign(keyName00);
+  Name certName001 = cert001->getName();
+
+  advanceClocks(time::milliseconds(100));
+  Name keyName01 = m_keyChain.generateRsaKeyPair(id0);
+  shared_ptr<IdentityCertificate> cert010 = m_keyChain.selfSign(keyName01);
+  Name certName010 = cert010->getName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert011 = m_keyChain.selfSign(keyName01);
+  Name certName011 = cert011->getName();
+  m_keyChain.addCertificate(*cert010);
+
+  advanceClocks(time::milliseconds(100));
+  Name id1("/test/identity1");
+  Name certName100 = m_keyChain.createIdentity(id1);
+  shared_ptr<IdentityCertificate> cert100 = m_keyChain.getCertificate(certName100);
+  Name keyName10 = cert100->getPublicKeyName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert101 = m_keyChain.selfSign(keyName10);
+  Name certName101 = cert101->getName();
+
+  advanceClocks(time::milliseconds(100));
+  Name keyName11 = m_keyChain.generateRsaKeyPair(id1);
+  shared_ptr<IdentityCertificate> cert110 = m_keyChain.selfSign(keyName11);
+  Name certName110 = cert110->getName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert111 = m_keyChain.selfSign(keyName11);
+  Name certName111 = cert111->getName();
+  m_keyChain.addCertificate(*cert111);
+
+
+  // Add a cert
+  BOOST_CHECK_EQUAL(db.hasIdentity(id0), false);
+  BOOST_CHECK_EQUAL(db.hasKey(keyName00), false);
+  BOOST_CHECK_EQUAL(db.hasCertificate(certName000), false);
+  UpdateParam param1(*cert000);
+  auto interest1 = generateSignedInterest(param1, owner, ownerMgmtCert.getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest1);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest1->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result1;
+  BOOST_REQUIRE_NO_THROW(result1.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result1.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK_EQUAL(db.hasIdentity(id0), true);
+  BOOST_CHECK_EQUAL(db.hasKey(keyName00), true);
+  BOOST_CHECK_EQUAL(db.hasCertificate(certName000), true);
+
+  db.addCertificate(*cert100);
+  BOOST_CHECK_EQUAL(db.hasIdentity(id1), true);
+  BOOST_CHECK_EQUAL(db.hasKey(keyName10), true);
+  BOOST_CHECK_EQUAL(db.hasCertificate(certName100), true);
+
+  // Set default
+  BOOST_CHECK_EQUAL(db.getDefaultIdentity(), id0);
+  BOOST_CHECK_EQUAL(db.getDefaultKeyNameOfIdentity(id0), keyName00);
+  BOOST_CHECK_EQUAL(db.getDefaultCertNameOfKey(keyName00), certName000);
+
+  UpdateParam param2(id1, DEFAULT_OPT_USER);
+  auto interest2 = generateSignedInterest(param2, owner, ownerMgmtCert.getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest2);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest2->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result2;
+  BOOST_REQUIRE_NO_THROW(result2.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result2.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK_EQUAL(db.getDefaultIdentity(), id1);
+
+  db.addCertificate(*cert010);
+  UpdateParam param3(keyName01, cert010->getPublicKeyInfo(), DEFAULT_OPT_ID);
+  auto interest3 = generateSignedInterest(param3, owner, ownerMgmtCert.getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest3);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest3->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result3;
+  BOOST_REQUIRE_NO_THROW(result3.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result3.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK_EQUAL(db.getDefaultKeyNameOfIdentity(id0), keyName01);
+
+  db.addCertificate(*cert011);
+  UpdateParam param4(*cert011, DEFAULT_OPT_KEY);
+  auto interest4 = generateSignedInterest(param4, owner, ownerMgmtCert.getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest4);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest4->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result4;
+  BOOST_REQUIRE_NO_THROW(result4.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result4.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK_EQUAL(db.getDefaultCertNameOfKey(keyName01), certName011);
+
+  // add key and certificate using regular keys.
+  BOOST_CHECK_EQUAL(db.hasKey(keyName11), false);
+  UpdateParam param5(keyName11, cert110->getPublicKeyInfo());
+  auto interest5 = generateSignedInterest(param5, owner, cert100->getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest5);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest5->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result5;
+  BOOST_REQUIRE_NO_THROW(result5.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result5.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK_EQUAL(db.hasKey(keyName11), true);
+
+  // add cert using its own key which has been added before
+  BOOST_CHECK_EQUAL(db.hasCertificate(cert101->getName()), false);
+  UpdateParam param6(*cert101);
+  auto interest6 = generateSignedInterest(param6, owner, cert100->getName());
+
+  face->sentDatas.clear();
+  face->receive(*interest6);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest6->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result6;
+  BOOST_REQUIRE_NO_THROW(result6.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result6.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK_EQUAL(db.hasCertificate(cert101->getName()), true);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
