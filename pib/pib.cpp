@@ -84,6 +84,7 @@ Pib::Pib(Face& face,
   , m_defaultProcessor(m_db)
   , m_listProcessor(m_db)
   , m_updateProcessor(m_db, *this)
+  , m_deleteProcessor(m_db)
 {
   if (!m_db.getOwnerName().empty() && m_db.getOwnerName() != owner)
     throw Error("owner argument differs from OwnerName in database");
@@ -105,6 +106,7 @@ Pib::~Pib()
   m_face.unsetInterestFilter(m_pibDefaultFilterId);
   m_face.unsetInterestFilter(m_pibListFilterId);
   m_face.unsetInterestFilter(m_pibUpdateFilterId);
+  m_face.unsetInterestFilter(m_pibDeleteFilterId);
 
   m_face.unsetInterestFilter(m_pibPrefixId);
 }
@@ -245,6 +247,10 @@ Pib::registerPrefix()
   // set interest filter for update command
   m_pibUpdateFilterId = registerSignedCommandProcessor(Name(pibPrefix).append(UpdateParam::VERB),
                                                        m_updateProcessor);
+
+  // set interest filter for delete command
+  m_pibDeleteFilterId = registerSignedCommandProcessor(Name(pibPrefix).append(DeleteParam::VERB),
+                                                       m_deleteProcessor);
 }
 
 template<class Processor>

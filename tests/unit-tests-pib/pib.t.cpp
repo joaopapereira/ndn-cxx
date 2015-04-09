@@ -769,6 +769,140 @@ BOOST_AUTO_TEST_CASE(IsUpdateAllowedTest2)
                     true);
 }
 
+BOOST_AUTO_TEST_CASE(IsDeleteAllowedTest1)
+{
+  // This test case is to check the access control of local management key
+
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+
+  DeleteQueryProcessor& pro = pib.m_deleteProcessor;
+
+  Name target01("/localhost/pib");
+  Name target02("/localhost/pib/alice/Mgmt");
+  Name target03("/localhost/pib/alice/Mgmt/ok");
+  Name target04("/localhost/pib/alice");
+  Name target05("/test/id");
+  Name target06("/test/id/ksk-123");
+  Name target07("/test/id/KEY/ksk-123/ID-CERT/version");
+  Name signer01 = pib.getMgmtCert().getName().getPrefix(-1);
+  Name signer02("/localhost/pib/bob/Mgmt/KEY/ksk-1234/ID-CERT");
+
+  // TYPE_USER is handled separately
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_USER, target02, signer01), false);
+
+  // Test access control of local management key
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, target01, signer01), false);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, target02, signer01), false);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, target03, signer01), false);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, target04, signer01), false);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, target05, signer01), true);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_KEY, target06, signer01), true);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_CERT, target07, signer01), true);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, target05, signer02), false);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_KEY, target06, signer02), false);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_CERT, target07, signer02), false);
+}
+
+BOOST_AUTO_TEST_CASE(IsDeleteAllowedTest2)
+{
+  // This test case is to check the access control of regular key
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+  PibDb db(tmpPath.string());
+  DeleteQueryProcessor& pro = pib.m_deleteProcessor;
+
+  Name parent("/test");
+  addIdentity(parent);
+  Name parentCertName = m_keyChain.getDefaultCertificateNameForIdentity(parent);
+  shared_ptr<IdentityCertificate> parentCert = m_keyChain.getCertificate(parentCertName);
+  Name parentSigner = parentCertName.getPrefix(-1);
+
+  advanceClocks(time::milliseconds(100));
+  Name parentKeyName2 = m_keyChain.generateRsaKeyPair(parent);
+  shared_ptr<IdentityCertificate> parentCert2 = m_keyChain.selfSign(parentKeyName2);
+  Name parentSigner2 = parentCert2->getName().getPrefix(-1);
+
+  db.addIdentity(parent);
+  db.addKey(parentCert->getPublicKeyName(), parentCert->getPublicKeyInfo());
+  db.addKey(parentCert2->getPublicKeyName(), parentCert2->getPublicKeyInfo());
+  db.setDefaultKeyNameOfIdentity(parentCert->getPublicKeyName());
+  db.addCertificate(*parentCert);
+  db.setDefaultCertNameOfKey(parentCert->getName());
+  db.addCertificate(*parentCert2);
+  db.setDefaultCertNameOfKey(parentCert2->getName());
+
+  Name testId("/test/id");
+  addIdentity(testId);
+  Name certName = m_keyChain.getDefaultCertificateNameForIdentity(testId);
+  shared_ptr<IdentityCertificate> testCert = m_keyChain.getCertificate(certName);
+  Name testKeyName = testCert->getPublicKeyName();
+  Name testSigner = certName.getPrefix(-1);
+
+  advanceClocks(time::milliseconds(100));
+  Name secondKeyName = m_keyChain.generateRsaKeyPair(testId);
+  shared_ptr<IdentityCertificate> secondCert = m_keyChain.selfSign(secondKeyName);
+  Name secondCertName = secondCert->getName();
+  Name secondSigner = secondCertName.getPrefix(-1);
+
+  db.addIdentity(testId);
+  db.addKey(testKeyName, testCert->getPublicKeyInfo());
+  db.addKey(secondKeyName, secondCert->getPublicKeyInfo());
+  db.setDefaultKeyNameOfIdentity(testKeyName);
+  db.addCertificate(*testCert);
+  db.setDefaultCertNameOfKey(testCert->getName());
+  db.addCertificate(*secondCert);
+  db.setDefaultCertNameOfKey(secondCert->getName());
+
+  Name nonSigner("/non-signer/KEY/ksk-123/ID-CERT");
+
+  // one can delete itself
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, testId, testSigner), true);
+  // parent can delete its child
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, testId, parentSigner), true);
+  // non-default key cannot delete its identity
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, testId, secondSigner), false);
+  // non-default key cannot delete its child
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, testId, parentSigner2), false);
+  // one cannot delete its parent
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_ID, parent, testSigner), false);
+
+  // one can delete its own key
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_KEY, testKeyName, testSigner), true);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_KEY, secondKeyName, testSigner), true);
+  // parent can delete its child's key
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_KEY, testKeyName, parentSigner), true);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_KEY, secondKeyName, parentSigner), true);
+  // non-default key cannot delete other key
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_KEY, testKeyName, secondSigner), false);
+  // non-default key can delete itself
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_KEY, secondKeyName, secondSigner), true);
+  // non-default key cannot delete its child's key
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_KEY, testKeyName, parentSigner2), false);
+
+  // one can delete its own certificate
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_CERT, certName, testSigner), true);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_CERT, secondCertName, testSigner), true);
+  // non-default key cannot delete other's certificate
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_CERT, certName, secondSigner), false);
+  // non-default key can delete its own certificate
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_CERT, secondCertName, secondSigner), true);
+  // parent can delete its child's certificate
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_CERT, certName, parentSigner), true);
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_CERT, secondCertName, parentSigner), true);
+  // non-default parent cannot delete its child's certificate
+  BOOST_CHECK_EQUAL(pro.isDeleteAllowed(TYPE_CERT, certName, parentSigner2), false);
+}
+
+
 BOOST_AUTO_TEST_CASE(UpdateUserTest)
 {
   owner = "alice";
@@ -777,6 +911,7 @@ BOOST_AUTO_TEST_CASE(UpdateUserTest)
           tmpPath.string(),
           m_keyChain.getTpm().getTpmLocator(),
           owner);
+
   advanceClocks(time::milliseconds(10), 10);
   util::InMemoryStoragePersistent& cache = pib.getResponseCache();
 
@@ -880,6 +1015,7 @@ BOOST_AUTO_TEST_CASE(UpdateRegularKeyTest)
           tmpPath.string(),
           m_keyChain.getTpm().getTpmLocator(),
           owner);
+
   advanceClocks(time::milliseconds(10), 10);
   util::InMemoryStoragePersistent& cache = pib.getResponseCache();
   auto ownerMgmtCert = pib.getMgmtCert();
@@ -1028,6 +1164,141 @@ BOOST_AUTO_TEST_CASE(UpdateRegularKeyTest)
   BOOST_REQUIRE_NO_THROW(result6.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
   BOOST_CHECK_EQUAL(result6.getErrorCode(), ERR_SUCCESS);
   BOOST_CHECK_EQUAL(db.hasCertificate(cert101->getName()), true);
+}
+
+BOOST_AUTO_TEST_CASE(DeleteUserTest)
+{
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+  advanceClocks(time::milliseconds(10), 10);
+  util::InMemoryStoragePersistent& cache = pib.getResponseCache();
+  auto ownerMgmtCert = pib.getMgmtCert();
+  m_keyChain.addCertificate(ownerMgmtCert);
+
+  PibDb db(tmpPath.string());
+
+  // Delete user should fail
+  DeleteParam param(Name(), TYPE_USER);
+  auto interest = generateSignedInterest(param, owner, ownerMgmtCert.getName());
+
+  face->receive(*interest);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result;
+  BOOST_REQUIRE_NO_THROW(result.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result.getErrorCode(), ERR_WRONG_PARAM);
+}
+
+BOOST_AUTO_TEST_CASE(DeleteRegularKeyTest)
+{
+  owner = "alice";
+
+  Pib pib(*face,
+          tmpPath.string(),
+          m_keyChain.getTpm().getTpmLocator(),
+          owner);
+  advanceClocks(time::milliseconds(10), 10);
+  util::InMemoryStoragePersistent& cache = pib.getResponseCache();
+  auto ownerMgmtCert = pib.getMgmtCert();
+  m_keyChain.addCertificate(ownerMgmtCert);
+
+  PibDb& db = pib.getDb();
+
+  Name testId("/test/identity");
+  Name testIdCertName00 = m_keyChain.createIdentity(testId);
+  shared_ptr<IdentityCertificate> cert00 = m_keyChain.getCertificate(testIdCertName00);
+  Name testIdKeyName0 = cert00->getPublicKeyName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert01 = m_keyChain.selfSign(testIdKeyName0);
+  Name testIdCertName01 = cert01->getName();
+
+  advanceClocks(time::milliseconds(100));
+  Name testIdKeyName1 = m_keyChain.generateRsaKeyPair(testId);
+  shared_ptr<IdentityCertificate> cert10 = m_keyChain.selfSign(testIdKeyName1);
+  Name testIdCertName10 = cert10->getName();
+  advanceClocks(time::milliseconds(100));
+  shared_ptr<IdentityCertificate> cert11 = m_keyChain.selfSign(testIdKeyName1);
+  Name testIdCertName11 = cert11->getName();
+  m_keyChain.addCertificate(*cert11);
+
+  db.addCertificate(*cert00);
+  db.addCertificate(*cert01);
+  db.addCertificate(*cert10);
+  db.addCertificate(*cert11);
+  db.setDefaultIdentity(testId);
+  db.setDefaultKeyNameOfIdentity(testIdKeyName0);
+  db.setDefaultCertNameOfKey(testIdCertName00);
+  db.setDefaultCertNameOfKey(testIdCertName10);
+
+  // delete a certificate itself
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName11), true);
+  DeleteParam param1(testIdCertName11, TYPE_CERT);
+  auto interest1 = generateSignedInterest(param1, owner, testIdCertName11);
+
+  face->sentDatas.clear();
+  face->receive(*interest1);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest1->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result1;
+  BOOST_REQUIRE_NO_THROW(result1.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result1.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK_EQUAL(db.hasCertificate(testIdCertName11), false);
+
+  // delete a key itself
+  BOOST_CHECK_EQUAL(db.hasKey(testIdKeyName1), true);
+  DeleteParam param2(testIdKeyName1, TYPE_KEY);
+  auto interest2 = generateSignedInterest(param2, owner, testIdCertName11);
+
+  face->sentDatas.clear();
+  face->receive(*interest2);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest2->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result2;
+  BOOST_REQUIRE_NO_THROW(result2.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result2.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK_EQUAL(db.hasKey(testIdKeyName1), false);
+
+  // delete an identity using non-default key, should fail
+  db.addCertificate(*cert11);
+  BOOST_CHECK_EQUAL(db.hasIdentity(testId), true);
+  DeleteParam param3(testId, TYPE_ID);
+  auto interest3 = generateSignedInterest(param3, owner, testIdCertName11);
+
+  face->sentDatas.clear();
+  face->receive(*interest3);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest3->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result3;
+  BOOST_REQUIRE_NO_THROW(result3.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result3.getErrorCode(), ERR_WRONG_SIGNER);
+  BOOST_CHECK_EQUAL(db.hasIdentity(testId), true);
+
+  // delete an identity using identity default key, should succeed
+  DeleteParam param4(testId, TYPE_ID);
+  auto interest4 = generateSignedInterest(param4, owner, testIdCertName00);
+
+  face->sentDatas.clear();
+  face->receive(*interest4);
+  advanceClocks(time::milliseconds(10), 10);
+
+  BOOST_CHECK(cache.find(interest4->getName()) != nullptr);
+  BOOST_REQUIRE_EQUAL(face->sentDatas.size(), 1);
+  PibError result4;
+  BOOST_REQUIRE_NO_THROW(result4.wireDecode(face->sentDatas[0].getContent().blockFromValue()));
+  BOOST_CHECK_EQUAL(result4.getErrorCode(), ERR_SUCCESS);
+  BOOST_CHECK_EQUAL(db.hasIdentity(testId), false);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

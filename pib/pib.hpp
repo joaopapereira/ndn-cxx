@@ -33,6 +33,7 @@
 #include "default-query-processor.hpp"
 #include "list-query-processor.hpp"
 #include "update-query-processor.hpp"
+#include "delete-query-processor.hpp"
 
 #include "security/sec-tpm.hpp"
 
@@ -160,6 +161,7 @@ private:
   const InterestFilterId* m_pibDefaultFilterId;
   const InterestFilterId* m_pibListFilterId;
   const InterestFilterId* m_pibUpdateFilterId;
+  const InterestFilterId* m_pibDeleteFilterId;
 
 NDN_CXX_PUBLIC_WITH_TESTS_ELSE_PRIVATE:
 
@@ -167,6 +169,7 @@ NDN_CXX_PUBLIC_WITH_TESTS_ELSE_PRIVATE:
   DefaultQueryProcessor m_defaultProcessor;
   ListQueryProcessor m_listProcessor;
   UpdateQueryProcessor m_updateProcessor;
+  DeleteQueryProcessor m_deleteProcessor;
 };
 
 } // namespace pib
