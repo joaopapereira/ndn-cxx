@@ -69,7 +69,29 @@ def check_override(self):
                       fragment=OVERRIDE,
                       features='cxx', mandatory=False):
         self.define('HAVE_CXX_OVERRIDE_FINAL', 1)
+CONST_ITERATORS = '''
+#include <vector>
+int
+main()
+{
+  using namespace std;
+  vector<int> v;
+  vector<int>::const_iterator it = v.cbegin();
+  
+  v.insert(it, 2);
+  return 0;
+}
+'''
+
+@conf
+def check_vector_const_iterators(self):
+    if self.check_cxx(msg='Checking for std::vector::insert with const_iterators',
+                      fragment=CONST_ITERATORS,
+                      features='cxx', mandatory=False):
+        self.define('HAVE_VECTOR_CONST_ITERATOR', 1)
+
 
 def configure(conf):
     conf.check_friend_typename()
     conf.check_override()
+    conf.check_vector_const_iterators()
