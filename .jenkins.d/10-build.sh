@@ -30,7 +30,7 @@ sudo ./waf -j1 --color=yes distclean
 if has code-coverage $JOB_NAME; then
     COVERAGE="--with-coverage"
 fi
-./waf -j1 --color=yes configure --debug --enable-shared --disable-static --with-tests --without-pch $COVERAGE
+./waf -j1 --color=yes configure --debug --enable-shared --disable-static --with-tests --without-pch --with-examples $COVERAGE
 ./waf -j1 --color=yes build
 
 # (tests will be run against debug version)
